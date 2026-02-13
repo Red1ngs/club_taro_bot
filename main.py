@@ -143,19 +143,18 @@ def main():
     print("🔐 Вход на сайт mangabuff.ru...")
     web_session = None
     try:
-        from utils.helpers import login_to_site
+        from utils import helpers
         
-        if login_to_site():
+        if helpers.login_to_site():
             print("✅ Успешная авторизация на сайте")
-            from utils.helpers import site_session
-            web_session = site_session
+            web_session = helpers.site_session  # ← Берём через модуль!
         else:
             print("❌ Ошибка авторизации на сайте")
             print("⚠️  Бот будет работать, но функции проверки членства могут быть недоступны")
     except Exception as e:
         print(f"❌ Исключение при авторизации: {e}")
         logger.exception("Ошибка при попытке входа на сайт")
-    
+        
     # Создаем приложение
     print("🤖 Создание приложения бота...")
     try:

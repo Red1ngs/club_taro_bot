@@ -275,3 +275,50 @@ def get_application_keyboard():
         [InlineKeyboardButton("📝 Подать заявку на вступление", callback_data='submit_application')],
         [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
     ])
+
+def get_wishlist_menu_keyboard():
+    """Главное меню хотелок"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎁 Мои хотелки у общага", callback_data='wishlist_mine_in_obshaga')],
+        [InlineKeyboardButton("💎 Хотелки общага у меня", callback_data='wishlist_obshaga_with_me')],
+        [InlineKeyboardButton("◀️ Назад", callback_data='close_menu')]
+    ])
+
+
+def get_account_selection_keyboard(user_id: int, action: str):
+    """
+    Клавиатура выбора аккаунта для хотелок
+    
+    Args:
+        user_id: ID пользователя
+        action: 'mine_in_obshaga' или 'obshaga_with_me'
+    """
+    from database.db import get_user_info, get_user_twinks
+    
+    keyboard = []
+    
+    # Основной аккаунт
+    user_info = get_user_info(user_id)
+    if user_info:
+        main_nick = user_info[4] if len(user_info) > 4 and user_info[4] else "Основной аккаунт"
+        keyboard.append([
+            InlineKeyboardButton(
+                f"👤 {main_nick}",
+                callback_data=f'select_account_main_{action}'
+            )
+        ])
+    
+    # Твины
+    twinks = get_user_twinks(user_id)
+    for twink in twinks:
+        nick = twink.get('site_nickname', f"User {twink.get('profile_id')}")
+        keyboard.append([
+            InlineKeyboardButton(
+                f"💎 {nick}",
+                callback_data=f'select_account_{twink.get("profile_id")}_{action}'
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Отмена", callback_data='wishlist_menu')])
+    
+    return InlineKeyboardMarkup(keyboard)
