@@ -241,11 +241,14 @@ def app_review_text(answers: dict) -> str:
 # ══════════════════════════════════════════════
 
 def get_operator_commands_keyboard():
+    """Клавиатура команд оператора (ОБНОВЛЕНО: добавлена кнопка загрузки цен)"""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Чёрный список",  callback_data='view_blacklist')],
         [InlineKeyboardButton("💬 Список диалогов", callback_data='view_dialogs')],
+        [InlineKeyboardButton("💳 Загрузить цены",  callback_data='upload_prices')],  # ← НОВАЯ КНОПКА
         [InlineKeyboardButton("◀️ Закрыть",         callback_data='close_menu')]
     ])
+
 
 def get_operator_menu_keyboard():
     return InlineKeyboardMarkup([

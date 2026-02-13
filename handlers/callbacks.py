@@ -469,6 +469,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit_message(query, "✅ <b>Заявка отправлена!</b>\n\nСпасибо за интерес к Club Taro. Оператор рассмотрит заявку и свяжется с вами.", parse_mode=ParseMode.HTML)
         return
 
+        # ══════════════════════════════════════════════════════════════
+    # ✅ НОВЫЕ ОБРАБОТЧИКИ ДЛЯ ЦЕН НА КАРТЫ
+    # ══════════════════════════════════════════════════════════════
+    
+    if data == 'upload_prices':
+        from handlers.card_prices import handle_upload_prices
+        await handle_upload_prices(update, context)
+        return
+    
+    if data == 'cancel_upload_prices':
+        from handlers.card_prices import handle_cancel_upload_prices
+        await handle_cancel_upload_prices(update, context)
+        return
+    
+    if data == 'send_card_for_evaluation':
+        from handlers.card_prices import handle_send_card_for_evaluation
+        await handle_send_card_for_evaluation(update, context)
+        return
+    
+    if data == 'cancel_card_evaluation':
+        from handlers.card_prices import handle_cancel_card_evaluation
+        await handle_cancel_card_evaluation(update, context)
+        return
+    
+
     # ══════════════════════════════════════════
     # ОПЕРАТОРСКИЕ ФУНКЦИИ
     # ══════════════════════════════════════════

@@ -77,7 +77,7 @@ def init_db():
         )
     ''')
 
-    # Таблица логов оператора
+        # Таблица логов оператора
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS operator_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,6 +88,16 @@ def init_db():
             target_first_name TEXT,
             details TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # ✅ НОВАЯ ТАБЛИЦА: Таблица цен на карты
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS card_prices (
+            card_id TEXT PRIMARY KEY,
+            card_url TEXT UNIQUE NOT NULL,
+            price REAL NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
 
@@ -631,6 +641,102 @@ def get_twinks_count(user_id: int) -> int:
         return 0
     finally:
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════
+# УПРАВЛЕНИЕ ЦЕНАМИ КАРТ
+# ══════════════════════════════════════════════════════════════
+
+def clear_all_card_prices():
+    """Удаляет все цены на карты из БД"""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM card_prices')
+    conn.commit()
+    conn.close()
+    logger.info("Все цены на карты удалены из БД")
+
+
+def save_card_price(card_url: str, price: float) -> bool:
+    """
+    Сохраняет цену карты в БД
+    
+    Args:
+        card_url: URL карты (https://mangabuff.ru/cards/XXXXXX/users)
+        price: Цена карты
+    
+    Returns:
+        bool: True если успешно, False при ошибке
+    """
+    import re
+    
+    # Извлекаем card_id из URL
+    match = re.search(r'/cards/(\d+)/', card_url)
+    if not match:
+        logger.error(f"Невалидный URL карты: {card_url}")
+        return False
+    
+    card_id = match.group(1)
+    
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute('''
+            INSERT OR REPLACE INTO card_prices (card_id, card_url, price, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ''', (card_id, card_url, price))
+        conn.commit()
+        logger.info(f"Цена на карту {card_id} сохранена: {price}")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения цены карты: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_card_price(card_id: str) -> Optional[float]:
+    """
+    Получает цену карты по ID
+    
+    Args:
+        card_id: ID карты (только цифры)
+    
+    Returns:
+        float: Цена карты или None если не найдена
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT price FROM card_prices WHERE card_id = ?', (card_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+
+def get_all_card_prices() -> List[Tuple[str, str, float, str]]:
+    """
+    Получает все цены на карты
+    
+    Returns:
+        List[Tuple]: [(card_id, card_url, price, updated_at), ...]
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT card_id, card_url, price, updated_at FROM card_prices ORDER BY updated_at DESC')
+    result = cursor.fetchall()
+    conn.close()
+    return result
+
+
+def get_card_prices_count() -> int:
+    """Возвращает количество цен в БД"""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM card_prices')
+    result = cursor.fetchone()[0]
+    conn.close()
+    return result
 
 
 # ══════════════════════════════════════════════════════════════

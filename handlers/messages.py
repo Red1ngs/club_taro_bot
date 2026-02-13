@@ -2,6 +2,7 @@
 Обработчик текстовых сообщений
 ✅ ОБНОВЛЕНО: Кнопка "🔔 Уведомления" открывает настройки per-аккаунт
 ✅ ОБНОВЛЕНО: Счётчик twinks_added_this_session
+✅ ОБНОВЛЕНО: Добавлена обработка цен на карты
 """
 import logging
 from telegram import Update, LinkPreviewOptions
@@ -34,6 +35,13 @@ from utils.helpers import (
 )
 from utils.dialog_manager import DialogManager
 from config.settings import WELCOME_TEXT
+
+# ✅ НОВЫЕ ИМПОРТЫ для функционала цен
+from handlers.card_prices import (
+    handle_card_url_message, 
+    handle_card_price_request, 
+    handle_prices_file
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +81,28 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state   = context.user_data.get('state')
     user_message = update.message.text
     dm = DialogManager(context.bot_data)
+
+    # ══════════════════════════════════════════════════════════════
+    # ✅ ОБРАБОТКА ЗАГРУЗКИ ЦЕН (ОПЕРАТОР)
+    # ══════════════════════════════════════════════════════════════
+    
+    if user_state == 'uploading_prices':
+        # Проверяем, что это документ (Excel файл)
+        if update.message.document:
+            await handle_prices_file(update, context)
+        else:
+            await update.message.reply_text(
+                "❌ Пожалуйста, отправьте Excel файл (.xlsx или .xls)"
+            )
+        return
+    
+    # ══════════════════════════════════════════════════════════════
+    # ✅ ОБРАБОТКА ЗАПРОСА ЦЕНЫ КАРТЫ (ПОЛЬЗОВАТЕЛЬ)
+    # ══════════════════════════════════════════════════════════════
+    
+    if user_state == 'requesting_card_price':
+        await handle_card_url_message(update, context)
+        return
 
     # ── ПЕРСОНАЛ ──────────────────────────────────────────────
     if is_staff(user_id):
@@ -257,7 +287,8 @@ async def _handle_reply_button(update, context, user, user_id, text):
         await update.message.reply_text("📋 <b>Договор за ОК</b>\n\nФункция в разработке.", parse_mode=ParseMode.HTML)
 
     elif text == BTN_CARD_PRICE:
-        await update.message.reply_text("💳 <b>Узнать цену Карты</b>\n\nФункция в разработке.", parse_mode=ParseMode.HTML)
+        # ✅ НОВЫЙ ОБРАБОТЧИК для кнопки "💳 Узнать цену Карты"
+        await handle_card_price_request(update, context)
 
     elif text == BTN_TWINKS:
         twinks = get_user_twinks(user_id)
