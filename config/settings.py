@@ -3,7 +3,7 @@
 """
 
 # Токен бота
-BOT_TOKEN = '8562662254:AAFqMiPjX4RU-aeA0IPW2OU4HIn1h4NEPIU'
+BOT_TOKEN = '8300878628:AAFe4N9HqfrZWt7ncdJZCSlGQbFjoUXAr7U'
 
 # ID администратора для сообщений
 ADMIN_CHAT_ID = '7991034391'

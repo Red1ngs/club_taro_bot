@@ -10,12 +10,14 @@ from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, TimedOut, NetworkError
 from config.settings import ADMIN_CHAT_ID, WELCOME_TEXT
+from handlers.wishlist import handle_my_wishlist_in_obshaga, handle_obshaga_wishlist_with_me
 from database.db import (
     add_to_blacklist, remove_from_blacklist, get_blacklist,
     is_user_linked, get_user_profile_url, log_operator_action,
     get_twinks_count, remove_twink,
     is_staff, is_admin,
     toggle_notification, get_notification_settings,
+    get_user_twinks 
 )
 from keyboards.inline import (
     get_main_menu_keyboard, get_back_button,
@@ -190,7 +192,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success = remove_twink(user_id, profile_id)
         if success:
             await query.answer("✅ Твин удалён", show_alert=False)
-            from database.db import get_user_twinks
             twinks = get_user_twinks(user_id)
             if not twinks:
                 text_msg = "💎 <b>Дополнительные аккаунты (твины)</b>\n\nУ вас больше нет привязанных твинов.\n\nХотите добавить твин?"
@@ -225,12 +226,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         added_count = context.user_data.get('twinks_added_this_session', 0)
 
         if source == 'linking':
-            twinks_count = get_twinks_count(user_id)
+            twinks = get_user_twinks(user_id)
+            twinks_count = len(twinks) if twinks else 0
             await _finish_account_linking(query, context, user, user_id, twinks_count)
         else:
             context.user_data['twink_source'] = None
             context.user_data['twinks_added_this_session'] = 0
-            from database.db import get_user_twinks
             twinks = get_user_twinks(user_id)
             if not twinks:
                 text_msg = "💎 <b>Дополнительные аккаунты (твины)</b>\n\nУ вас пока нет привязанных твинов.\n\nХотите добавить твин?"
@@ -243,7 +244,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == 'twink_no':
-        twinks_count = get_twinks_count(user_id)
+        twinks = get_user_twinks(user_id)
+        twinks_count = len(twinks) if twinks else 0
         await _finish_account_linking(query, context, user, user_id, twinks_count)
         return
 
@@ -253,12 +255,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         added_count = context.user_data.get('twinks_added_this_session', 0)
 
         if source == 'linking':
-            twinks_count = get_twinks_count(user_id)
+            twinks = get_user_twinks(user_id)
+            twinks_count = len(twinks) if twinks else 0
             await _finish_account_linking(query, context, user, user_id, twinks_count)
         else:
             context.user_data['twink_source'] = None
             context.user_data['twinks_added_this_session'] = 0
-            from database.db import get_user_twinks
             twinks = get_user_twinks(user_id)
             if added_count == 0:
                 if not twinks:
@@ -339,8 +341,117 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if data == 'wishlist':
-        await safe_edit_message(query, "💝 <b>Хотелки</b>\n\nФункция в разработке.", reply_markup=get_back_button(), parse_mode=ParseMode.HTML)
+    if data == 'wishlist_menu':
+        # Возврат в меню хотелок
+        from keyboards.inline import get_wishlist_menu_keyboard
+        await safe_edit_message(
+            query,
+            "💝 <b>Хотелки</b>\n\n"
+            "Выберите действие:",
+            reply_markup=get_wishlist_menu_keyboard(),
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    if data == 'wishlist_mine_in_obshaga':
+        # Мои хотелки у общага
+        from database.db import get_user_profile_url, get_twinks_count
+        from keyboards.inline import get_account_selection_keyboard
+        
+        profile_url = get_user_profile_url(user_id)
+        if not profile_url:
+            await query.answer("❌ Сначала привяжите аккаунт", show_alert=True)
+            return
+        
+        # Проверяем наличие твинов
+        twinks = get_user_twinks(user_id)
+        twinks_count = len(twinks) if twinks else 0
+        
+        if twinks_count > 0:
+            # Есть твины - предлагаем выбрать аккаунт
+            await safe_edit_message(
+                query,
+                "💎 <b>Выберите аккаунт</b>\n\n"
+                "Для какого аккаунта искать хотелки в общаге?",
+                reply_markup=get_account_selection_keyboard(user_id, 'mine_in_obshaga'),
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            # Нет твинов - сразу запускаем поиск
+            import re
+            match = re.search(r'/users/(\d+)', profile_url)
+            if match:
+                context.user_data['selected_profile_id'] = match.group(1)
+                await handle_my_wishlist_in_obshaga(update, context)
+            else:
+                await query.answer("❌ Ошибка получения ID профиля", show_alert=True)
+        return
+    
+    if data == 'wishlist_obshaga_with_me':
+        # Хотелки общага у меня
+        from database.db import get_user_profile_url, get_twinks_count
+        from keyboards.inline import get_account_selection_keyboard
+        
+        profile_url = get_user_profile_url(user_id)
+        if not profile_url:
+            await query.answer("❌ Сначала привяжите аккаунт", show_alert=True)
+            return
+        
+        # Проверяем наличие твинов
+        twinks = get_user_twinks(user_id)
+        twinks_count = len(twinks) if twinks else 0
+        
+        if twinks_count > 0:
+            # Есть твины - предлагаем выбрать аккаунт
+            await safe_edit_message(
+                query,
+                "💎 <b>Выберите аккаунт</b>\n\n"
+                "Для какого аккаунта проверять хотелки общага?",
+                reply_markup=get_account_selection_keyboard(user_id, 'obshaga_with_me'),
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            # Нет твинов - сразу запускаем поиск
+            import re
+            match = re.search(r'/users/(\d+)', profile_url)
+            if match:
+                context.user_data['selected_profile_id'] = match.group(1)
+                await handle_obshaga_wishlist_with_me(update, context)
+            else:
+                await query.answer("❌ Ошибка получения ID профиля", show_alert=True)
+        return
+    
+    if data.startswith('select_account_'):
+        # Выбор аккаунта для хотелок
+        parts = data.split('_')
+        # Формат: select_account_main_mine_in_obshaga или select_account_12345_mine_in_obshaga
+        
+        if parts[2] == 'main':
+            # Основной аккаунт
+            from database.db import get_user_profile_url
+            profile_url = get_user_profile_url(user_id)
+            import re
+            match = re.search(r'/users/(\d+)', profile_url)
+            if match:
+                context.user_data['selected_profile_id'] = match.group(1)
+            else:
+                await query.answer("❌ Ошибка получения ID профиля", show_alert=True)
+                return
+        else:
+            # Твин
+            profile_id = parts[2]
+            context.user_data['selected_profile_id'] = profile_id
+        
+        # Определяем действие
+        action = '_'.join(parts[3:])  # mine_in_obshaga или obshaga_with_me
+        
+        if action == 'mine_in_obshaga':
+            await handle_my_wishlist_in_obshaga(update, context)
+        elif action == 'obshaga_with_me':
+            await handle_obshaga_wishlist_with_me(update, context)
+        else:
+            await query.answer("❌ Неизвестное действие", show_alert=True)
+        
         return
 
     if data == 'contract_ok':

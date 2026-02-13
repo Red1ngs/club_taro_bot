@@ -14,7 +14,8 @@ from database.db import (
     get_user_profile_url, add_to_blacklist,
     log_operator_action, save_dialog_message,
     add_twink, get_twinks_count, get_user_twinks,
-    is_staff, get_all_users_by_role
+    is_staff, get_all_users_by_role,
+    get_user_twinks
 )
 from keyboards.inline import (
     get_back_button, get_user_action_keyboard, get_application_keyboard,
@@ -252,7 +253,8 @@ async def _handle_reply_button(update, context, user, user_id, text):
                 if m:
                     user_data['profile_id'] = m.group(1)
             if not profile_url or not user_data['profile_id']:
-                twinks_count = get_twinks_count(user_id)
+                twinks = get_user_twinks(user_id)
+                twinks_count = len(twinks) if twinks else 0
                 await loading_msg.edit_text(
                     f"👤 <b>Базовый профиль</b>\n\nИмя: {user.first_name}\n"
                     f"Username: @{user.username or 'не указан'}\nПрофиль на сайте: не привязан"
@@ -264,7 +266,8 @@ async def _handle_reply_button(update, context, user, user_id, text):
             if not profile:
                 await loading_msg.edit_text("❌ Ошибка при построении профиля. Попробуйте позже.")
                 return
-            twinks_count = get_twinks_count(user_id)
+            twinks = get_user_twinks(user_id)
+            twinks_count = len(twinks) if twinks else 0
             twinks_suffix = f"\n\n💎 <b>Твинов привязано:</b> {twinks_count}" if twinks_count > 0 else ""
             await loading_msg.edit_text(format_profile_message(profile) + twinks_suffix,
                                         parse_mode=ParseMode.HTML, link_preview_options=LinkPreviewOptions(is_disabled=True))
@@ -281,7 +284,15 @@ async def _handle_reply_button(update, context, user, user_id, text):
         )
 
     elif text == BTN_WISHLIST:
-        await update.message.reply_text("💝 <b>Хотелки</b>\n\nФункция в разработке.", parse_mode=ParseMode.HTML)
+        # Показываем меню хотелок
+        from keyboards.inline import get_wishlist_menu_keyboard
+        
+        await update.message.reply_text(
+            "💝 <b>Хотелки</b>\n\n"
+            "Выберите действие:",
+            reply_markup=get_wishlist_menu_keyboard(),
+            parse_mode=ParseMode.HTML
+        )
 
     elif text == BTN_CONTRACT:
         await update.message.reply_text("📋 <b>Договор за ОК</b>\n\nФункция в разработке.", parse_mode=ParseMode.HTML)
@@ -398,7 +409,8 @@ async def _handle_twink_linking(update, context, user, user_id, user_message):
     if success:
         # ✅ Увеличиваем счётчик добавленных за сессию твинов
         context.user_data['twinks_added_this_session'] = context.user_data.get('twinks_added_this_session', 0) + 1
-        twinks_count = get_twinks_count(user_id)
+        twinks = get_user_twinks(user_id)
+        twinks_count = len(twinks) if twinks else 0
         await update.message.reply_text(
             f"✅ <b>Твин успешно привязан!</b>\n\nПрофиль: {user_message}\nНик: {site_nickname}\n\n"
             f"💎 Всего твинов: {twinks_count}\n\nМожете отправить ещё одну ссылку, нажать «Готово» или «Отмена».",
