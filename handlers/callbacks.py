@@ -1,6 +1,7 @@
 """
 Обработчики нажатий на inline-кнопки
 ✅ ИСПРАВЛЕНО: Правильная проверка ролей (оператор vs администратор)
+✅ ИСПРАВЛЕНО: Нельзя привязать пустой твин — добавлена кнопка "Отмена" и проверка счётчика
 """
 import logging
 from telegram import Update, LinkPreviewOptions
@@ -12,7 +13,6 @@ from database.db import (
     add_to_blacklist, remove_from_blacklist, get_blacklist,
     is_user_linked, get_user_profile_url, log_operator_action,
     get_twinks_count, remove_twink,
-    # ✅ ИСПРАВЛЕНИЕ: Используем правильные функции проверки ролей
     is_staff, is_admin
 )
 from keyboards.inline import (
@@ -30,10 +30,6 @@ from utils.helpers import get_user_link
 from utils.dialog_manager import DialogManager
 
 logger = logging.getLogger(__name__)
-
-
-# ✅ УДАЛЕНА НЕПРАВИЛЬНАЯ ФУНКЦИЯ is_operator()
-# Теперь используем is_staff() и is_admin() из database.db
 
 
 # ═════════════════════════════════════════════════════════════
@@ -112,6 +108,65 @@ def _store_msg(context, message):
     context.user_data['app_chat_id']  = message.chat_id
 
 
+# ═════════════════════════════════════════════════════════════
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: завершение привязки аккаунта
+# ═════════════════════════════════════════════════════════════
+
+async def _finish_account_linking(query, context, user, user_id, twinks_count: int):
+    """
+    Общая функция завершения процесса привязки аккаунта.
+    Вызывается из twink_no, twink_done (linking) и cancel_twink_add (linking).
+    """
+    context.user_data['state'] = None
+    context.user_data['twink_source'] = None
+    context.user_data['twinks_added_this_session'] = 0
+
+    is_operator = is_staff(user_id)
+    main_profile_url = context.user_data.get('main_profile_url', 'не указан')
+
+    twinks_info = f"\n💎 Привязано твинов: {twinks_count}" if twinks_count > 0 else ""
+
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=(
+            f"✅ <b>Аккаунт успешно привязан!</b>\n\n"
+            f"Профиль: {main_profile_url}{twinks_info}\n\n"
+            f"Теперь вам доступны все функции бота.\n"
+            f"Нажмите на иконку с квадратами рядом с полем ввода, "
+            f"чтобы открыть меню команд 👇"
+        ),
+        reply_markup=get_reply_keyboard_for_linked_user(is_operator=is_operator),
+        parse_mode=ParseMode.HTML,
+        link_preview_options=LinkPreviewOptions(is_disabled=True)
+    )
+
+    # Уведомляем оператора
+    user_link = get_user_link(user_id, user.first_name or user.username or "Пользователь")
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=(
+                f"🔗 <b>Новая привязка аккаунта</b>\n\n"
+                f"Пользователь: {user_link}\n"
+                f"ID: <code>{user_id}</code>\n"
+                f"Профиль: {main_profile_url}"
+                f"{twinks_info}"
+                + (f"\n\n⚙️ <i>Это персонал</i>" if is_operator else "")
+            ),
+            parse_mode=ParseMode.HTML,
+            link_preview_options=LinkPreviewOptions(is_disabled=True)
+        )
+    except Exception as e:
+        logger.error(f"Ошибка уведомления оператора: {e}")
+
+    logger.info(f"Пользователь {user_id} завершил привязку (твинов: {twinks_count})")
+
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий на inline-кнопки"""
     query = update.callback_query
@@ -126,8 +181,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ✅ ОБРАБОТКА КНОПОК УПРАВЛЕНИЯ ТВИНАМИ
     # ══════════════════════════════════════════
     if data == 'add_twink':
-        """Пользователь хочет добавить твин через меню"""
+        """Пользователь хочет добавить твин через меню твинов"""
         context.user_data['state'] = 'adding_twinks'
+        # ✅ Запоминаем источник и сбрасываем счётчик добавленных за сессию
+        context.user_data['twink_source'] = 'menu'
+        context.user_data['twinks_added_this_session'] = 0
         
         await safe_edit_message(
             query,
@@ -135,7 +193,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Отправьте ссылку на ваш дополнительный аккаунт на MangaBuff.\n\n"
             "Формат: <code>https://mangabuff.ru/users/XXXXXX</code>\n\n"
             "❗️ Твины могут не состоять в клубе.\n\n"
-            "Когда закончите, нажмите кнопку «Готово» ниже.",
+            "Когда закончите добавлять, нажмите кнопку «Готово».\n"
+            "Для отмены нажмите «Отмена».",
             reply_markup=get_twink_done_keyboard(),
             parse_mode=ParseMode.HTML
         )
@@ -188,8 +247,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == 'twink_yes':
-        """Пользователь хочет привязать твины"""
+        """Пользователь хочет привязать твины (из потока привязки аккаунта)"""
         context.user_data['state'] = 'adding_twinks'
+        # ✅ Запоминаем источник и сбрасываем счётчик
+        context.user_data['twink_source'] = 'linking'
+        context.user_data['twinks_added_this_session'] = 0
         
         await safe_edit_message(
             query,
@@ -197,64 +259,155 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Отправьте ссылку на ваш дополнительный аккаунт на MangaBuff.\n\n"
             "Формат: <code>https://mangabuff.ru/users/XXXXXX</code>\n\n"
             "❗️ Твины могут не состоять в клубе.\n\n"
-            "Когда закончите, нажмите кнопку «Готово» ниже.",
+            "Когда закончите добавлять, нажмите кнопку «Готово».\n"
+            "Для отмены нажмите «Отмена».",
             reply_markup=get_twink_done_keyboard(),
             parse_mode=ParseMode.HTML
         )
         logger.info(f"Пользователь {user_id} начал привязку твинов")
         return
 
-    if data == 'twink_no' or data == 'twink_done':
-        """Пользователь отказался или завершил привязку твинов"""
+    # ══════════════════════════════════════════
+    # ✅ НОВЫЙ ОБРАБОТЧИК: ОТМЕНА ДОБАВЛЕНИЯ ТВИНА
+    # ══════════════════════════════════════════
+    if data == 'cancel_twink_add':
+        """
+        Пользователь нажал «Отмена» при добавлении твина.
+        Поведение зависит от источника:
+          - 'linking': аккаунт уже привязан — завершаем поток как twink_no
+          - 'menu': возвращаем к управлению твинами
+        """
         context.user_data['state'] = None
-        # ✅ ИСПРАВЛЕНИЕ: Используем is_staff() вместо is_operator()
-        is_operator = is_staff(user_id)
-        
-        twinks_count = get_twinks_count(user_id)
-        
-        main_profile_url = context.user_data.get('main_profile_url', 'не указан')
-        
-        twinks_info = f"\n💎 Привязано твинов: {twinks_count}" if twinks_count > 0 else ""
-        
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=(
-                f"✅ <b>Аккаунт успешно привязан!</b>\n\n"
-                f"Профиль: {main_profile_url}{twinks_info}\n\n"
-                f"Теперь вам доступны все функции бота.\n"
-                f"Нажмите на иконку с квадратами рядом с полем ввода, "
-                f"чтобы открыть меню команд 👇"
-            ),
-            reply_markup=get_reply_keyboard_for_linked_user(is_operator=is_operator),
-            parse_mode=ParseMode.HTML,
-            link_preview_options=LinkPreviewOptions(is_disabled=True)
-        )
-        
-        # Уведомляем оператора
-        user_link = get_user_link(user_id, user.first_name or user.username or "Пользователь")
-        try:
-            await context.bot.send_message(
-                chat_id=ADMIN_CHAT_ID,
-                text=(
-                    f"🔗 <b>Новая привязка аккаунта</b>\n\n"
-                    f"Пользователь: {user_link}\n"
-                    f"ID: <code>{user_id}</code>\n"
-                    f"Профиль: {main_profile_url}"
-                    f"{twinks_info}"
-                    + (f"\n\n⚙️ <i>Это персонал</i>" if is_operator else "")
-                ),
+        source = context.user_data.get('twink_source', 'menu')
+        added_count = context.user_data.get('twinks_added_this_session', 0)
+
+        if source == 'linking':
+            # Аккаунт уже был привязан — просто завершаем без твинов
+            # (или с уже добавленными, если успели добавить до отмены)
+            twinks_count = get_twinks_count(user_id)
+            await _finish_account_linking(query, context, user, user_id, twinks_count)
+        else:
+            # Пришли из меню — возвращаем к экрану управления твинами
+            context.user_data['twink_source'] = None
+            context.user_data['twinks_added_this_session'] = 0
+
+            from database.db import get_user_twinks
+            twinks = get_user_twinks(user_id)
+
+            if not twinks:
+                text_msg = (
+                    "💎 <b>Дополнительные аккаунты (твины)</b>\n\n"
+                    "У вас пока нет привязанных твинов.\n\n"
+                    "Хотите добавить твин?"
+                )
+            else:
+                twinks_list = "\n".join(
+                    f"{idx+1}. {t.get('site_nickname', 'Без ника')} - {t.get('profile_url')}"
+                    for idx, t in enumerate(twinks)
+                )
+                text_msg = (
+                    f"💎 <b>Ваши твины ({len(twinks)})</b>\n\n"
+                    f"{twinks_list}\n\n"
+                    "Вы можете добавить новый или удалить существующий."
+                )
+
+            await safe_edit_message(
+                query,
+                text_msg,
+                reply_markup=get_twink_manage_keyboard(user_id),
                 parse_mode=ParseMode.HTML,
                 link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
-        except Exception as e:
-            logger.error(f"Ошибка уведомления оператора: {e}")
-        
-        logger.info(f"Пользователь {user_id} завершил привязку (твинов: {twinks_count})")
+
+        logger.info(
+            f"Пользователь {user_id} отменил добавление твина "
+            f"(источник: {source}, добавлено за сессию: {added_count})"
+        )
+        return
+
+    if data == 'twink_no':
+        """Пользователь отказался от привязки твинов"""
+        twinks_count = get_twinks_count(user_id)
+        await _finish_account_linking(query, context, user, user_id, twinks_count)
+        return
+
+    if data == 'twink_done':
+        """
+        Пользователь нажал «Готово» при добавлении твинов.
+        ✅ ИСПРАВЛЕНО: Если ни одного твина не было добавлено за сессию —
+        показываем предупреждение и остаёмся в режиме добавления.
+        Исключение: источник 'linking' — завершаем поток в любом случае.
+        """
+        context.user_data['state'] = None
+        source = context.user_data.get('twink_source', 'menu')
+        added_count = context.user_data.get('twinks_added_this_session', 0)
+
+        if source == 'linking':
+            # Из потока привязки аккаунта — завершаем в любом случае
+            twinks_count = get_twinks_count(user_id)
+            await _finish_account_linking(query, context, user, user_id, twinks_count)
+
+        else:
+            # Из меню
+            if added_count == 0:
+                # ✅ Ничего не было добавлено — возвращаем к управлению твинами
+                from database.db import get_user_twinks
+                twinks = get_user_twinks(user_id)
+
+                if not twinks:
+                    text_msg = (
+                        "💎 <b>Дополнительные аккаунты (твины)</b>\n\n"
+                        "Вы не добавили ни одного твина.\n\n"
+                        "Хотите попробовать ещё раз?"
+                    )
+                else:
+                    twinks_list = "\n".join(
+                        f"{idx+1}. {t.get('site_nickname', 'Без ника')} - {t.get('profile_url')}"
+                        for idx, t in enumerate(twinks)
+                    )
+                    text_msg = (
+                        f"💎 <b>Ваши твины ({len(twinks)})</b>\n\n"
+                        f"{twinks_list}\n\n"
+                        "Вы можете добавить новый или удалить существующий."
+                    )
+
+                await safe_edit_message(
+                    query,
+                    text_msg,
+                    reply_markup=get_twink_manage_keyboard(user_id),
+                    parse_mode=ParseMode.HTML,
+                    link_preview_options=LinkPreviewOptions(is_disabled=True)
+                )
+
+                logger.info(f"Пользователь {user_id} нажал 'Готово' без добавления твинов (меню)")
+
+            else:
+                # Твины были добавлены — показываем итог
+                from database.db import get_user_twinks
+                twinks = get_user_twinks(user_id)
+                twinks_list = "\n".join(
+                    f"{idx+1}. {t.get('site_nickname', 'Без ника')} - {t.get('profile_url')}"
+                    for idx, t in enumerate(twinks)
+                )
+                await safe_edit_message(
+                    query,
+                    f"✅ <b>Твины успешно добавлены!</b>\n\n"
+                    f"💎 <b>Ваши твины ({len(twinks)})</b>\n\n"
+                    f"{twinks_list}\n\n"
+                    "Управляйте твинами через кнопки ниже.",
+                    reply_markup=get_twink_manage_keyboard(user_id),
+                    parse_mode=ParseMode.HTML,
+                    link_preview_options=LinkPreviewOptions(is_disabled=True)
+                )
+
+                logger.info(
+                    f"Пользователь {user_id} завершил добавление твинов "
+                    f"(добавлено: {added_count})"
+                )
+
+            context.user_data['twink_source'] = None
+            context.user_data['twinks_added_this_session'] = 0
+
         return
 
     # ══════════════════════════════════════════
@@ -264,8 +417,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['state'] = None
         context.user_data['app_answers'] = {}
         context.user_data['blocking_user_id'] = None
+        context.user_data['twink_source'] = None
+        context.user_data['twinks_added_this_session'] = 0
         linked = is_user_linked(user_id)
-        # ✅ ИСПРАВЛЕНИЕ: Используем is_staff() вместо is_operator()
         is_operator = is_staff(user_id)
         
         if linked:
@@ -563,7 +717,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ══════════════════════════════════════════
 
     if data == 'view_blacklist':
-        # ✅ ИСПРАВЛЕНИЕ: Проверяем, является ли пользователь персоналом
         if not is_staff(user_id):
             await query.answer("❌ Недостаточно прав", show_alert=True)
             return
@@ -599,7 +752,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith('reply_'):
-        # ✅ ИСПРАВЛЕНИЕ: Проверяем, является ли пользователь персоналом
         if not is_staff(user_id):
             await query.answer("❌ Недостаточно прав", show_alert=True)
             return
@@ -614,7 +766,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             user_name = f"User {reply_user_id}"
         
-        # ✅ Логируем начало диалога
         log_operator_action(
             user_id,
             'dialog_start',
@@ -655,7 +806,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # БЛОКИРОВКА С УКАЗАНИЕМ ПРИЧИНЫ
     # ══════════════════════════════════════════
     if data.startswith('block_'):
-        # ✅ ИСПРАВЛЕНИЕ: Проверяем, является ли пользователь персоналом
         if not is_staff(user_id):
             await query.answer("❌ Недостаточно прав", show_alert=True)
             return
@@ -685,14 +835,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith('unblock_'):
-        # ✅ ИСПРАВЛЕНИЕ: Проверяем, является ли пользователь персоналом
         if not is_staff(user_id):
             await query.answer("❌ Недостаточно прав", show_alert=True)
             return
             
         unblocked_uid = int(data.split('_')[1])
         
-        # Получаем информацию о пользователе для логирования
         from database.db import get_user_info
         user_info = get_user_info(unblocked_uid)
         target_username = user_info[1] if user_info else None
@@ -700,7 +848,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         remove_from_blacklist(unblocked_uid)
         
-        # ✅ Логируем разблокировку
         log_operator_action(
             user_id,
             'user_unblocked',
@@ -724,7 +871,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ПЕРЕКЛЮЧЕНИЕ МЕЖДУ ДИАЛОГАМИ
     # ══════════════════════════════════════════
     if data.startswith('switch_dialog_'):
-        # ✅ ИСПРАВЛЕНИЕ: Проверяем, является ли пользователь персоналом
         if not is_staff(user_id):
             await query.answer("❌ Недостаточно прав", show_alert=True)
             return
@@ -735,7 +881,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if dm.switch_dialog(user_id, dialog_id):
             dialog_info = dm.get_dialog_info(dialog_id)
             
-            # ✅ Логируем переключение
             log_operator_action(
                 user_id,
                 'dialog_switch',
@@ -763,7 +908,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ЗАВЕРШЕНИЕ ВСЕХ ДИАЛОГОВ
     # ══════════════════════════════════════════
     if data == 'end_all_dialogs':
-        # ✅ ИСПРАВЛЕНИЕ: Проверяем, является ли пользователь персоналом
         if not is_staff(user_id):
             await query.answer("❌ Недостаточно прав", show_alert=True)
             return
@@ -774,7 +918,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         count = dm.end_all_operator_dialogs(user_id)
         
-        # ✅ Логируем действие
         log_operator_action(
             user_id,
             'dialog_end',

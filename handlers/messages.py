@@ -2,6 +2,7 @@
 Обработчик текстовых сообщений
 ✅ ОБНОВЛЕНО: Добавлена кнопка "💎 Твины" в постоянном меню
 ✅ ИСПРАВЛЕНО: Сообщения "связь с оператором" идут оператору из БД, остальное - админу
+✅ ИСПРАВЛЕНО: Счётчик twinks_added_this_session для защиты от пустых привязок
 """
 import logging
 from telegram import Update, LinkPreviewOptions
@@ -44,7 +45,6 @@ async def _send_to_operators(context, text, reply_markup=None, **kwargs):
     """
     operators = get_all_users_by_role('operator')
     if not operators:
-        # Если операторов нет — fallback на админа
         logger.warning("Операторов в БД нет, отправляем администратору")
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
@@ -328,7 +328,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         user_link = get_user_link(user_id, user.first_name or user.username or "Пользователь")
 
-        # ✅ Сообщение от пользователя → операторам из БД
         await _send_to_operators(
             context,
             text=(
@@ -344,25 +343,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-# Пример обновления функции _handle_reply_button для кнопки профиля
-#
-# Разместите этот код в handlers/messages.py, заменив текущую обработку BTN_PROFILE
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ОБРАБОТЧИК КНОПКИ "ПРОФИЛЬ" С РАСШИРЕННЫМИ ДАННЫМИ
-# ═══════════════════════════════════════════════════════════════════════════
-
 async def _handle_reply_button(update, context, user, user_id, text):
     dm = DialogManager(context.bot_data)
     
     if text == BTN_PROFILE:
-        # Показываем индикатор загрузки
         loading_msg = await update.message.reply_text(
             "🔄 Загружаю данные профиля..."
         )
         
         try:
-            # Получаем данные пользователя из БД
             from database.db import get_user_info
             user_info = get_user_info(user_id)
             
@@ -372,18 +361,16 @@ async def _handle_reply_button(update, context, user, user_id, text):
                 )
                 return
             
-            # Формируем dict для построения профиля
             user_data = {
                 'user_id': user_info[0],
                 'username': user_info[1],
                 'first_name': user_info[2],
                 'last_name': user_info[3],
                 'profile_url': get_user_profile_url(user_id),
-                'profile_id': None,  # Получим из URL
+                'profile_id': None,
                 'site_nickname': user_info[4] if len(user_info) > 4 else None,
             }
             
-            # Извлекаем profile_id из URL
             profile_url = user_data['profile_url']
             if profile_url:
                 import re
@@ -391,7 +378,6 @@ async def _handle_reply_button(update, context, user, user_id, text):
                 if match:
                     user_data['profile_id'] = match.group(1)
             
-            # Проверяем наличие необходимых данных
             if not profile_url or not user_data['profile_id']:
                 twinks_count = get_twinks_count(user_id)
                 twinks_info = f"\n💎 Твинов привязано: {twinks_count}" if twinks_count > 0 else ""
@@ -407,7 +393,6 @@ async def _handle_reply_button(update, context, user, user_id, text):
                 )
                 return
             
-            # Строим расширенный профиль
             from utils.profile_builder import build_user_profile, format_profile_message
             
             profile = build_user_profile(user_data)
@@ -418,11 +403,9 @@ async def _handle_reply_button(update, context, user, user_id, text):
                 )
                 return
             
-            # Добавляем информацию о твинах
             twinks_count = get_twinks_count(user_id)
             twinks_suffix = f"\n\n💎 <b>Твинов привязано:</b> {twinks_count}" if twinks_count > 0 else ""
             
-            # Форматируем и отправляем
             message = format_profile_message(profile) + twinks_suffix
             
             await loading_msg.edit_text(
@@ -438,10 +421,6 @@ async def _handle_reply_button(update, context, user, user_id, text):
                 f"Попробуйте позже или обратитесь к администратору."
             )
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # ОСТАЛЬНЫЕ КНОПКИ (без изменений)
-    # ═══════════════════════════════════════════════════════════════════════════
-    
     elif text == BTN_NOTIFICATIONS:
         await update.message.reply_text(
             "🔔 <b>Уведомления</b>\n\nФункция частично разработана, вам придет уведомление в лс.",
@@ -546,7 +525,6 @@ async def _handle_linking(update, context, user, user_id, user_message):
 
     if not is_member:
         user_link = get_user_link(user_id, user.first_name or user.username or "Пользователь")
-        # ✅ Попытка привязки без членства → администратору
         try:
             await context.bot.send_message(
                 chat_id=ADMIN_CHAT_ID,
@@ -627,7 +605,7 @@ async def _handle_twink_linking(update, context, user, user_id, user_message):
             "Пожалуйста, отправьте ссылку в формате:\n"
             "<code>https://mangabuff.ru/users/XXXXXX</code>\n\n"
             "где XXXXXX - от 1 до 7 цифр\n\n"
-            "Или нажмите кнопку «Готово» для завершения.",
+            "Или нажмите кнопку «Готово» для завершения, «Отмена» для отмены.",
             reply_markup=get_twink_done_keyboard(),
             parse_mode=ParseMode.HTML
         )
@@ -637,7 +615,7 @@ async def _handle_twink_linking(update, context, user, user_id, user_message):
     if profile_id == main_profile_id:
         await update.message.reply_text(
             "⚠️ <b>Это ваш основной аккаунт!</b>\n\n"
-            "Отправьте ссылку на другой аккаунт (твин) или нажмите «Готово».",
+            "Отправьте ссылку на другой аккаунт (твин), нажмите «Готово» или «Отмена».",
             reply_markup=get_twink_done_keyboard(),
             parse_mode=ParseMode.HTML
         )
@@ -658,13 +636,17 @@ async def _handle_twink_linking(update, context, user, user_id, user_message):
         pass
 
     if success:
+        # ✅ Увеличиваем счётчик добавленных за сессию твинов
+        current_count = context.user_data.get('twinks_added_this_session', 0)
+        context.user_data['twinks_added_this_session'] = current_count + 1
+
         twinks_count = get_twinks_count(user_id)
         await update.message.reply_text(
             f"✅ <b>Твин успешно привязан!</b>\n\n"
             f"Профиль: {user_message}\n"
             f"Ник: {site_nickname}\n\n"
             f"💎 Всего твинов: {twinks_count}\n\n"
-            f"Можете отправить ещё одну ссылку или нажмите «Готово».",
+            f"Можете отправить ещё одну ссылку, нажать «Готово» или «Отмена».",
             reply_markup=get_twink_done_keyboard(),
             parse_mode=ParseMode.HTML,
             link_preview_options=LinkPreviewOptions(is_disabled=True)
@@ -673,7 +655,7 @@ async def _handle_twink_linking(update, context, user, user_id, user_message):
     else:
         await update.message.reply_text(
             "⚠️ <b>Этот твин уже привязан!</b>\n\n"
-            "Отправьте ссылку на другой аккаунт или нажмите «Готово».",
+            "Отправьте ссылку на другой аккаунт, нажмите «Готово» или «Отмена».",
             reply_markup=get_twink_done_keyboard(),
             parse_mode=ParseMode.HTML
         )
